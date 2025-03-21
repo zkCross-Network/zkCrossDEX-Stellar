@@ -1,0 +1,131 @@
+Functional Lines of Code – Lock and Release Contract
+This document lists all the functional lines of code from the Lock and Release contract. These lines actively contribute to the execution logic, including state changes, function calls, and external contract interactions.
+
+[Previous EVM contract content remains unchanged...]
+
+Stellar Contract Implementation
+============================
+
+Contract State
+soroban
+Copy
+pub struct LockReleaseContract {
+    owner: Address,
+    admin: Address,
+    locked_balances: Map<Address, i128>,
+    token_pairs: Map<BytesN<32>, BytesN<32>>
+}
+
+Initialize Function
+soroban
+Copy
+pub fn initialize(env: Env, owner: Address) {
+    if has_owner(&env) {
+        panic!("already initialized");
+    }
+    owner.require_auth();
+    set_owner(&env, &owner);
+}
+
+Lock Function
+soroban
+Copy
+pub fn lock(
+    env: Env,
+    user_address: Address,
+    from_token: Address,
+    dest_token: Address,
+    in_amount: i128,
+    dest_chain: BytesN<32>,
+    recipient_address: Address
+) {
+    user_address.require_auth();
+    verify_token_pair(&env, &from_token, &dest_token);
+    transfer_from_user(&env, &from_token, &user_address, &in_amount);
+    update_locked_balance(&env, &user_address, &in_amount);
+    emit_lock_event(&env, &user_address, &in_amount, &recipient_address);
+}
+
+Release Function
+soroban
+Copy
+pub fn release(
+    env: Env,
+    amount: i128,
+    user: Address,
+    destination_token: Address
+) {
+    require_admin(&env);
+    verify_locked_balance(&env, &user, &amount);
+    transfer_to_user(&env, &destination_token, &user, &amount);
+    update_balance_after_release(&env, &user, &amount);
+    emit_release_event(&env, &user, &amount);
+}
+
+Admin Management
+soroban
+Copy
+pub fn set_admin(env: Env, admin: Address) {
+    require_owner(&env);
+    set_admin_internal(&env, &admin);
+}
+
+pub fn remove_admin(env: Env) {
+    require_owner(&env);
+    remove_admin_internal(&env);
+}
+
+Token Operations
+soroban
+Copy
+fn transfer_from_user(env: &Env, token: &Address, from: &Address, amount: &i128) {
+    let client = token::Client::new(env, token);
+    client.transfer(from, &env.current_contract_address(), amount);
+}
+
+fn transfer_to_user(env: &Env, token: &Address, to: &Address, amount: &i128) {
+    let client = token::Client::new(env, token);
+    client.transfer(&env.current_contract_address(), to, amount);
+}
+
+Balance Management
+soroban
+Copy
+fn update_locked_balance(env: &Env, user: &Address, amount: &i128) {
+    let current = get_locked_balance(env, user);
+    set_locked_balance(env, user, &(current + amount));
+}
+
+fn verify_locked_balance(env: &Env, user: &Address, amount: &i128) {
+    let balance = get_locked_balance(env, user);
+    if balance < *amount {
+        panic!("insufficient locked balance");
+    }
+}
+
+Events
+soroban
+Copy
+fn emit_lock_event(env: &Env, user: &Address, amount: &i128, recipient: &Address) {
+    env.events().publish(("lock", user, amount, recipient));
+}
+
+fn emit_release_event(env: &Env, user: &Address, amount: &i128) {
+    env.events().publish(("release", user, amount));
+}
+
+Authorization Checks
+soroban
+Copy
+fn require_admin(env: &Env) {
+    let admin = get_admin(env);
+    admin.require_auth();
+}
+
+fn require_owner(env: &Env) {
+    let owner = get_owner(env);
+    owner.require_auth();
+}
+
+Conclusion
+The above lines represent the functional code that directly contributes to the Stellar contract's behavior. Non-functional lines, such as comments, type declarations, and test code, are excluded. The contract implements secure lock and release functionality for cross-chain asset transfers on the Stellar blockchain. 
