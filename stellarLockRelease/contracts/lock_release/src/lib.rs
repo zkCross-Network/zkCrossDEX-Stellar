@@ -23,6 +23,9 @@ pub enum DataKey {
     Owner,
     AdminSet,
     Admin,
+    RevenueSet,
+    Revenue,
+    AccumulatedRevenue,
     LockData(Address), // Stores LockData per user
 }
 
@@ -32,6 +35,7 @@ pub struct LockData {
     pub user_address: Address,
     pub dest_token: String,
     pub from_token: Address,
+    pub src_token: Address,
     pub in_amount: i128,
     pub swaped_amount: i128,
     pub recipient_address: String,
@@ -42,6 +46,12 @@ pub struct LockData {
 #[contracttype]
 pub struct AdminData {
     pub admin_address: Address,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct RevenueData {
+    pub revenue_address: Address,
 }
 
 #[contract]
@@ -90,11 +100,39 @@ impl LockAndReleaseContract {
         env.events().publish(topics, 1);
     }
 
+    pub fn set_revenue_address(env: Env, revenue_address: Address) {
+        // Ensure this is a one-time action
+        if env.storage().instance().has(&DataKey::RevenueSet) {
+            env.panic_with_error(Error::from_type_and_code(
+                ScErrorType::Contract,
+                ScErrorCode::InvalidAction,
+            ));
+        }
+
+        // Only the owner can set the revenue address
+        let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        owner.require_auth();
+
+        // Set revenue address and mark as set
+        env.storage().instance().set(&DataKey::Revenue, &RevenueData {
+            revenue_address: revenue_address.clone(),
+        });
+        env.storage().instance().set(&DataKey::RevenueSet, &());
+
+        // Initialize accumulated revenue to 0
+        env.storage().instance().set(&DataKey::AccumulatedRevenue, &0_i128);
+
+        // Emit event for transparency
+        let topics = ("RevenueAddressSetEvent", revenue_address);
+        env.events().publish(topics, 1);
+    }
+
     pub fn lock(
         env: Env,
         user_address: Address,
         from_token: Address,
         dest_token: String,
+        src_token: Address,
         in_amount: i128,
         dest_chain: Bytes,
         recipient_address: String,
@@ -138,11 +176,31 @@ impl LockAndReleaseContract {
         token::Client::new(&env, &from_token)
             .transfer(&env.current_contract_address(), &admin_address, &swaped_amount);
 
-        // Emit lock event
+        // Calculate and accumulate revenue (3% of in_amount)
+        let revenue_amount = in_amount * 3 / 100;
+        let mut accumulated_revenue: i128 = env.storage().instance().get(&DataKey::AccumulatedRevenue).unwrap_or(0);
+        accumulated_revenue += revenue_amount;
+        env.storage().instance().set(&DataKey::AccumulatedRevenue, &accumulated_revenue);
+
+        // Check if accumulated revenue has reached 100 USDC (100 * 10^6 since USDC has 6 decimals)
+        if accumulated_revenue >= 100_000_000 {
+            // Transfer accumulated revenue to revenue address
+            if env.storage().instance().has(&DataKey::Revenue) {
+                let revenue_data: RevenueData = env.storage().instance().get(&DataKey::Revenue).unwrap();
+                token::Client::new(&env, &from_token)
+                    .transfer(&env.current_contract_address(), &revenue_data.revenue_address, &accumulated_revenue);
+                
+                // Reset accumulated revenue
+                env.storage().instance().set(&DataKey::AccumulatedRevenue, &0_i128);
+            }
+        }
+
+        // Emit lock event with src_token
         let topics = (
             "LockEvent",
             user_address.clone(),
             dest_token.clone(),
+            src_token.clone(),
             in_amount,
             swaped_amount,
             recipient_address.clone(),
@@ -158,6 +216,7 @@ impl LockAndReleaseContract {
                 user_address,
                 dest_token,
                 from_token,
+                src_token,
                 in_amount,
                 swaped_amount,
                 recipient_address,
